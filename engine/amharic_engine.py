@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IBus engine adapter for Amharic phonetic input (Fedora)."""
+"""IBus engine adapter for Amharic phonetic input on Linux."""
 
 from __future__ import annotations
 

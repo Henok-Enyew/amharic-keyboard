@@ -4,7 +4,7 @@
   <name>org.freedesktop.IBus.AmharicPhonetic</name>
   <description>Amharic Phonetic (SERA) Input Method</description>
   <exec>@PYTHON@ @ENGINE_EXEC@ --ibus</exec>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <author>Henok Enyew &lt;henokenyew86@gmail.com&gt;</author>
   <license>MIT</license>
   <homepage>https://henokenyew.me</homepage>

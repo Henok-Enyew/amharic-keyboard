@@ -1,76 +1,104 @@
-# Amharic Phonetic IBus Engine (Fedora)
+# Amharic Phonetic
 
-System-wide Amharic (አማርኛ) phonetic input for **Fedora Linux**, using **IBus** (already the default input framework on GNOME and KDE spins).
+**System-wide Amharic (አማርኛ) input for Linux** — type Latin letters, get Fidel, in every app.
 
-Type Latin letters and Fidel appears live — same SERA / GFF rules as the companion web app [Amharic Keyboard](../Amharic%20Keyboard), with underlined **preedit** like Chinese/Japanese IMEs on your system.
+SERA / GFF phonetic rules · Live underlined preedit · Works with GNOME (and other IBus desktops) · User-level install, no root for the engine
 
-## Requirements
-
-- Fedora (tested against IBus 1.5.x)
-- Packages (Workstation usually has these already):
-
-```bash
-sudo dnf install ibus python3-gobject
+```
+selam   →  ሰላም
+amarNa  →  አማርኛ
+kremt   →  ክረምት
 ```
 
-No compiler, no meson, no extra daemons.
+---
 
-## Install (one script)
+## Install
+
+**One-time packages** (pick your distro), then the installer:
+
+<table>
+<tr><td><b>Fedora / RHEL</b></td><td>
 
 ```bash
-cd ~/Desktop/amharic-ibus-fedora   # or wherever you cloned this repo
+sudo dnf install ibus python3-gobject git
+```
+
+</td></tr>
+<tr><td><b>Ubuntu / Debian</b></td><td>
+
+```bash
+sudo apt install ibus python3-gi gir1.2-ibus-1.0 git
+```
+
+</td></tr>
+<tr><td><b>Arch</b></td><td>
+
+```bash
+sudo pacman -S ibus python-gobject git
+```
+
+</td></tr>
+</table>
+
+**Install the engine** (current user only — no sudo):
+
+```bash
+git clone https://github.com/Henok-Enyew/amharic-keyboard.git
+cd amharic-keyboard
 chmod +x install.sh uninstall.sh
 ./install.sh
 ```
 
-What it does:
+Already cloned? Re-run `./install.sh` anytime to upgrade in place.
 
-1. Checks for `ibus` and PyGObject IBus bindings
-2. Copies the engine to `~/.local/share/ibus/engine/amharic/`
-3. Writes `~/.local/share/ibus/component/amharic.xml`
-4. Seeds `~/.config/amharic-ibus/config.json` **only if missing**
-5. Runs `ibus write-cache` and `ibus restart`
-
-### Add it in GNOME Settings
-
-GNOME often **hides** custom IBus engines. The installer turns on “show all sources”
-and adds **Amharic Phonetic** for you. After `./install.sh`:
-
-1. Open **Settings → Keyboard → Input Sources** — you should see **Amharic Phonetic**
-2. Switch with **Super+Space** (top bar language menu)
-
-If you add it manually with **+**:
-
-1. Search **Amharic**
-2. Click the **Amharic** language row (don’t stop there — Add stays grayed out)
-3. Choose **Amharic Phonetic** (the IBus engine) — **not** the plain “Amharic” keyboard layout
-4. Click **Add**
-
-Or from a terminal:
+Check status later:
 
 ```bash
-gsettings set org.gnome.desktop.input-sources show-all-sources true
-gsettings set org.gnome.desktop.input-sources sources "[('xkb', 'us'), ('ibus', 'amharic-phonetic')]"
+./install.sh --status
 ```
 
-Open Text Editor, switch to Amharic Phonetic, type `amarNa` — you should see **አማርኛ**.
+### GNOME (Fedora Workstation, etc.)
 
-If IBus loses the engine after reboot, run:
+The installer:
+
+- Enables “show all input sources”
+- Adds **Amharic Phonetic** to your input sources
+- Sets **Super+Space** for switching (and clears conflicting IBus grabs)
+
+Then:
+
+1. Click any text field  
+2. Press **Super+Space** until the top bar shows **Amharic Phonetic**  
+3. Type `selam` → **ሰላም**
+
+> In **Settings → Keyboard → Input Sources → +**, open the **Amharic** language, then choose **Amharic Phonetic** (IBus).  
+> Do **not** pick the plain **Amharic** XKB layout — that is a different keyboard.
+
+### After reboot
+
+A small autostart entry re-registers the engine with IBus. If it ever goes missing:
 
 ```bash
 python3 ~/.local/share/ibus/engine/amharic/register_component.py
+./install.sh --status
 ```
 
-A login autostart entry is also installed so registration survives reboots.
+### KDE Plasma / other IBus desktops
+
+1. Run `./install.sh`  
+2. Set **IBus** as the input method framework in System Settings  
+3. Add **Amharic Phonetic** and use your desktop’s input-source shortcut  
+
+---
 
 ## Uninstall
 
 ```bash
-./uninstall.sh          # keeps your config
-./uninstall.sh --purge  # also deletes ~/.config/amharic-ibus
+./uninstall.sh          # keep ~/.config/amharic-ibus
+./uninstall.sh --purge  # remove config too
 ```
 
-Then remove the input source from Settings if it still shows up.
+---
 
 ## How to type
 
@@ -81,25 +109,23 @@ Then remove the input source from Settings if it still shows up.
 | 2nd | `u` | `lu` → ሉ |
 | 3rd | `i` | `li` → ሊ |
 | 4th | `a` | `la` → ላ |
-| 5th | `E` or `ie` | `lE` → ሌ |
+| 5th | `E` / `ie` | `lE` → ሌ |
 | 7th | `o` | `lo` → ሎ |
 
-Useful keys:
+**Useful**
 
-- Digraphs: `sh` → ሸ, `ch` → ቸ; ejectives `T` `C` `P` `S`
-- Apostrophe syllable break: `r'E` → ርኤ (not ሬ)
-- Punctuation (if enabled): `.` → ። , `,` → ፣ , `;` → ፤ (double-tap for Latin)
+- Digraphs: `sh` → ሸ, `ch` → ቸ · ejectives `T` `C` `P` `S`
+- Syllable break: `r'E` → ርኤ (not ሬ)
+- Punctuation (optional): `.` → ። · `,` → ፣ · `;` → ፤ (double-tap for Latin)
+- **Canonical SERA:** bare consonant = 6th order — `kremt` → ክረምት, `kiremiti` → ኪረሚቲ
 
-### `kremt` vs `kiremiti`
+Switch back to English with **Super+Space**. Ctrl shortcuts (copy/paste, etc.) pass through.
 
-This engine follows **canonical SERA**: bare consonant = 6th order (schwa).
+---
 
-- `kremt` → ክረምት
-- `kiremiti` → ኪረሚቲ (`i` is 3rd order, not schwa)
+## Configuration
 
-## Config
-
-Edit `~/.config/amharic-ibus/config.json`:
+`~/.config/amharic-ibus/config.json` (created on first install):
 
 ```json
 {
@@ -108,37 +134,73 @@ Edit `~/.config/amharic-ibus/config.json`:
 }
 ```
 
-Changes are picked up the next time a text field gets focus (`do_focus_in`). No IBus restart needed.
+Changes apply the next time a text field gets focus — no IBus restart.
 
-English input: switch Input Sources (Super+Space) to your US/English keyboard — this engine does **not** steal Ctrl+Space.
+---
 
-## Development / tests
+## What gets installed
 
-Composer is pure Python (no IBus imports):
+| Path | Purpose |
+|------|---------|
+| `~/.local/share/ibus/engine/amharic/` | Engine + composer + rules |
+| `~/.local/share/ibus/component/amharic.xml` | IBus component |
+| `~/.config/amharic-ibus/config.json` | User options |
+| `~/.config/autostart/amharic-ibus-register.desktop` | Re-register on login |
+
+Nothing is written under `/usr` — fully reversible with `./uninstall.sh`.
+
+---
+
+## Requirements
+
+- Linux with **IBus** 1.5.x  
+- **Python 3.10+** with **PyGObject** IBus bindings  
+- Tested on **Fedora 43 · GNOME 49 · Wayland**  
+
+---
+
+## Development
+
+Composer is pure Python (no IBus import) — easy to test:
 
 ```bash
-cd amharic-ibus-fedora
 python3 -m pip install pytest
 python3 -m pytest
 ```
 
-Verified words: `amarNa`, `adis abeba`, `gebr'El`, `kremt`.
+Rule table: `engine/rules.json` (SERA/GFF). Companion web keyboard (same rules) lives alongside this project when developed together.
 
-## Rule table source of truth
+```
+engine/
+  amharic_engine.py   # IBus adapter
+  composer.py         # transliteration core
+  rules.json          # mappings
+  register_component.py
+component/
+  amharic.xml.in      # template (paths filled by install.sh)
+config/
+  default_config.json
+```
 
-Mappings live in `engine/rules.json`, exported from the web app’s [`rules.ts`](../Amharic%20Keyboard/src/engine/rules.ts).
+---
 
-**Canonical source:** web app `src/engine/rules.ts`. When you change a mapping there, re-export into this repo’s `engine/rules.json` (and keep both READMEs pointing at each other).
+## Troubleshooting
 
-## KDE Plasma (short note)
+| Symptom | Fix |
+|---------|-----|
+| Engine missing after reboot | `python3 ~/.local/share/ibus/engine/amharic/register_component.py` |
+| Super+Space does nothing | Re-run `./install.sh` (resets IBus hotkey grabs + GNOME binding) |
+| Only Latin while “Amharic” selected | You may have the XKB **Amharic** layout — switch to **Amharic Phonetic** |
+| `install.sh` says missing deps | Install packages from the table above, then retry |
 
-IBus works on Fedora KDE as well. After `./install.sh`:
+```bash
+./install.sh --status
+ibus list-engine | grep amharic
+ibus engine
+```
 
-1. System Settings → Input Devices / Keyboard → Input Method (or “Virtual Keyboard” / IBus depending on Plasma version)
-2. Ensure IBus is the input method framework
-3. Add **Amharic Phonetic** and switch with the Plasma input-source shortcut
+---
 
 ## License
 
-MIT — Henok Enyew ([henokenyew.me](https://henokenyew.me) · henokenyew86@gmail.com)
-# amharic-keyboard
+[MIT](LICENSE) © [Henok Enyew](https://henokenyew.me) · henokenyew86@gmail.com

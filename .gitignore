@@ -1,4 +1,4 @@
-# pytest
+# pytest / Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -7,3 +7,10 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# editor / OS
+.DS_Store
+*~
+*.swp
+.idea/
+.vscode/
