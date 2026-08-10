@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Template: install.sh substitutes @PYTHON@ @ENGINE_EXEC@ @ENGINE_DIR@ -->
+<component>
+  <name>org.freedesktop.IBus.AmharicPhonetic</name>
+  <description>Amharic Phonetic (SERA) Input Method</description>
+  <exec>@PYTHON@ @ENGINE_EXEC@ --ibus</exec>
+  <version>1.0.0</version>
+  <author>Henok Enyew &lt;henokenyew86@gmail.com&gt;</author>
+  <license>MIT</license>
+  <homepage>https://henokenyew.me</homepage>
+  <textdomain>amharic-ibus</textdomain>
+  <engines>
+    <engine>
+      <name>amharic-phonetic</name>
+      <language>am</language>
+      <license>MIT</license>
+      <author>Henok Enyew</author>
+      <icon>@ENGINE_DIR@/icons/amharic.svg</icon>
+      <layout>us</layout>
+      <longname>Amharic Phonetic</longname>
+      <description>SERA / GFF Amharic phonetic keyboard — type Latin, get Fidel</description>
+      <rank>99</rank>
+      <symbol>አ</symbol>
+    </engine>
+  </engines>
+</component>
