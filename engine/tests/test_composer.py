@@ -58,6 +58,9 @@ class TestMatchSyllable:
         assert match_syllable("Na") == "ኛ"
         assert match_syllable("mua") == "ሟ"
         assert match_syllable("kua") == "ኳ"
+        assert match_syllable("hua") == "ኋ"
+        assert match_syllable("Hua") == "ኋ"
+        assert match_syllable("tua") == "ቷ"
 
 
 class TestVerifiedWords:
