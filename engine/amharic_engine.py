@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import logging
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import gi
@@ -141,6 +144,9 @@ class AmharicEngine(IBus.Engine):
         self._super_down = False
         self._ctrl_down = False
         self._alt_down = False
+        # Monotonic time of last do_enable — used to avoid Super+Space bounce-back
+        # when Mutter just activated us via the same keypress.
+        self._enabled_at: float | None = None
 
     def _new_composer_state(self) -> CompositionState:
         cfg = _CONFIG.config
@@ -158,7 +164,16 @@ class AmharicEngine(IBus.Engine):
         )
 
     def do_enable(self):  # noqa: N802
+        self._enabled_at = time.monotonic()
         self._apply_config()
+        LOG.info("engine enabled")
+
+    def do_disable(self):  # noqa: N802
+        self._enabled_at = None
+        self._super_down = False
+        self._ctrl_down = False
+        self._alt_down = False
+        LOG.info("engine disabled")
 
     def do_focus_in(self):  # noqa: N802
         self.do_focus_in_id("", "")
@@ -257,45 +272,88 @@ class AmharicEngine(IBus.Engine):
         )
 
     @staticmethod
-    def _switch_to_english_source() -> None:
-        """Leave Amharic for the first XKB layout (usually English).
-
-        Idempotent if Mutter already switched — avoids double-toggle.
-        Needed because terminals often deliver Super+Space to the IME
-        instead of letting Mutter handle it.
-        """
-        import ast
-        import subprocess
-
+    def _read_gnome_input_sources() -> tuple[list, int] | None:
+        """Return (sources, current_index) from GNOME, or None if unavailable."""
         try:
-            raw = subprocess.check_output(
+            raw_sources = subprocess.check_output(
                 ["gsettings", "get", "org.gnome.desktop.input-sources", "sources"],
                 text=True,
             ).strip()
-            sources = list(ast.literal_eval(raw))
+            raw_current = subprocess.check_output(
+                ["gsettings", "get", "org.gnome.desktop.input-sources", "current"],
+                text=True,
+            ).strip()
+            sources = list(ast.literal_eval(raw_sources))
+            # gsettings prints "uint32 N"
+            current = int(raw_current.split()[-1])
+            return sources, current
+        except Exception:
+            LOG.exception("Failed to read GNOME input sources")
+            return None
+
+    @staticmethod
+    def _just_enabled_at(enabled_at: float | None, window_s: float = 0.45) -> bool:
+        """True if Mutter likely just activated us via this Super+Space."""
+        if enabled_at is None:
+            return False
+        return (time.monotonic() - enabled_at) < window_s
+
+    def _just_enabled(self, window_s: float = 0.45) -> bool:
+        return self._just_enabled_at(self._enabled_at, window_s)
+
+    def _expire_bounce_guard(self) -> None:
+        """After real typing, Super+Space must leave Amharic (not keep bounce-guard)."""
+        if self._enabled_at is not None:
+            self._enabled_at = 0.0
+
+    def _switch_to_english_source(self) -> None:
+        """Leave Amharic for the first XKB layout (usually English).
+
+        Always force both GNOME `current` and `ibus engine`. GNOME can report
+        English in gsettings while this Amharic engine is still active — skipping
+        in that case leaves the user stuck typing Fidel.
+        """
+        try:
+            parsed = self._read_gnome_input_sources()
+            sources = parsed[0] if parsed else []
             target = 0
             for i, pair in enumerate(sources):
                 if pair and pair[0] == "xkb":
                     target = i
                     break
-            subprocess.check_call(
-                [
-                    "gsettings",
-                    "set",
-                    "org.gnome.desktop.input-sources",
-                    "current",
-                    str(target),
-                ]
-            )
-            # Keep ibus-daemon in sync with GNOME
+            if sources:
+                subprocess.check_call(
+                    [
+                        "gsettings",
+                        "set",
+                        "org.gnome.desktop.input-sources",
+                        "current",
+                        str(target),
+                    ]
+                )
+            # Critical: sync ibus even when gsettings already says English
             subprocess.Popen(
                 ["ibus", "engine", "xkb:us::eng"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            LOG.info("Super+Space fallback: switched to English (index %s)", target)
+            LOG.info("Super+Space: forced English (gsettings index %s + ibus)", target)
         except Exception:
             LOG.exception("Failed to switch to English input source")
+
+    def _handle_super_space_switch(self) -> None:
+        """Avoid enter bounce-back; always leave Amharic when stably active.
+
+        - English → Super+Space → Mutter enables us → Space may still arrive:
+          if just enabled, keep Amharic.
+        - Amharic (stable) → Super+Space → force English (gsettings + ibus).
+        """
+        if self._just_enabled():
+            LOG.info(
+                "Super+Space: engine just enabled — keep Amharic (no bounce-back)"
+            )
+            return
+        self._switch_to_english_source()
 
     def _update_modifier_latch(self, keyval: int, is_release: bool) -> bool:
         """Track Super/Ctrl/Alt latch. Return True if this keyval is a modifier."""
@@ -327,7 +385,7 @@ class AmharicEngine(IBus.Engine):
         if is_release:
             return False
 
-        # Super+Space — never compose; toggle source if the event reached us
+        # Super+Space — never compose; sync with the real current source.
         # (Mutter already handled it in some apps; in terminals it often does not).
         if (self._super_down or (state & IBus.ModifierType.SUPER_MASK)) and keyval in (
             IBus.space,
@@ -335,8 +393,18 @@ class AmharicEngine(IBus.Engine):
         ):
             if self._composer.pending_latin or self._composer.preview:
                 self._flush_commit_reset()
-            self._switch_to_english_source()
+            self._handle_super_space_switch()
             return True
+
+        # User typed after enable — expire bounce guard so leave always works
+        if keyval_to_char(keyval) or keyval in (
+            IBus.BackSpace,
+            IBus.Return,
+            IBus.KP_Enter,
+            IBus.Tab,
+            IBus.space,
+        ):
+            self._expire_bounce_guard()
 
         # Super/Ctrl/Alt chords must reach the desktop/app
         if (
