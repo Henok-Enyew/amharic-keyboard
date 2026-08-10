@@ -117,6 +117,14 @@ subprocess.check_call(
 )
 print("sources =", fmt)
 PY
+
+  # On Wayland, Mutter owns Super+Space. IBus must NOT also grab it —
+  # otherwise switching breaks when Amharic is active.
+  echo "==> Configuring Super+Space for GNOME (clear conflicting IBus grabs)"
+  gsettings set org.gnome.desktop.wm.keybindings switch-input-source "['<Super>space']" 2>/dev/null || true
+  gsettings set org.gnome.desktop.wm.keybindings switch-input-source-backward "['<Shift><Super>space']" 2>/dev/null || true
+  gsettings set org.freedesktop.ibus.general.hotkey triggers "[]" 2>/dev/null || true
+  gsettings set org.freedesktop.ibus.general.hotkey trigger "[]" 2>/dev/null || true
 fi
 
 cat <<EOF

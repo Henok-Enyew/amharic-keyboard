@@ -136,6 +136,11 @@ class AmharicEngine(IBus.Engine):
             )
         self._composer = self._new_composer_state()
         self._client = ""
+        # Wayland/terminals often deliver Super+Space without SUPER_MASK on Space.
+        # Track Super ourselves so we never eat the switch shortcut.
+        self._super_down = False
+        self._ctrl_down = False
+        self._alt_down = False
 
     def _new_composer_state(self) -> CompositionState:
         cfg = _CONFIG.config
@@ -168,9 +173,15 @@ class AmharicEngine(IBus.Engine):
 
     def do_focus_out_id(self, object_path):  # noqa: N802
         del object_path
+        self._super_down = False
+        self._ctrl_down = False
+        self._alt_down = False
         self._flush_commit_reset()
 
     def do_reset(self):  # noqa: N802
+        self._super_down = False
+        self._ctrl_down = False
+        self._alt_down = False
         self._flush_commit_reset()
 
     def _clear_preedit(self) -> None:
@@ -245,19 +256,100 @@ class AmharicEngine(IBus.Engine):
             )
         )
 
+    @staticmethod
+    def _switch_to_english_source() -> None:
+        """Leave Amharic for the first XKB layout (usually English).
+
+        Idempotent if Mutter already switched — avoids double-toggle.
+        Needed because terminals often deliver Super+Space to the IME
+        instead of letting Mutter handle it.
+        """
+        import ast
+        import subprocess
+
+        try:
+            raw = subprocess.check_output(
+                ["gsettings", "get", "org.gnome.desktop.input-sources", "sources"],
+                text=True,
+            ).strip()
+            sources = list(ast.literal_eval(raw))
+            target = 0
+            for i, pair in enumerate(sources):
+                if pair and pair[0] == "xkb":
+                    target = i
+                    break
+            subprocess.check_call(
+                [
+                    "gsettings",
+                    "set",
+                    "org.gnome.desktop.input-sources",
+                    "current",
+                    str(target),
+                ]
+            )
+            # Keep ibus-daemon in sync with GNOME
+            subprocess.Popen(
+                ["ibus", "engine", "xkb:us::eng"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            LOG.info("Super+Space fallback: switched to English (index %s)", target)
+        except Exception:
+            LOG.exception("Failed to switch to English input source")
+
+    def _update_modifier_latch(self, keyval: int, is_release: bool) -> bool:
+        """Track Super/Ctrl/Alt latch. Return True if this keyval is a modifier."""
+        if keyval in (IBus.Super_L, IBus.Super_R, IBus.Hyper_L, IBus.Hyper_R):
+            self._super_down = not is_release
+            return True
+        if keyval in (IBus.Control_L, IBus.Control_R):
+            self._ctrl_down = not is_release
+            return True
+        if keyval in (IBus.Alt_L, IBus.Alt_R, IBus.Meta_L, IBus.Meta_R):
+            # Meta is often Alt on PC keyboards
+            self._alt_down = not is_release
+            return True
+        return False
+
     def _process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
         del keycode
-        if state & IBus.ModifierType.RELEASE_MASK:
+        is_release = bool(state & IBus.ModifierType.RELEASE_MASK)
+
+        if self._update_modifier_latch(keyval, is_release):
+            # Flush on Ctrl/Alt press so shortcuts see a clean buffer
+            if not is_release and (
+                keyval in (IBus.Control_L, IBus.Control_R, IBus.Alt_L, IBus.Alt_R)
+            ):
+                if self._composer.pending_latin or self._composer.preview:
+                    self._flush_commit_reset()
             return False
 
-        # Super+Space, Ctrl+C/V, Alt+Tab, etc. must reach the desktop/app.
-        # Flush any open preedit first so shortcuts see a clean buffer.
-        if self._has_passthrough_modifier(state):
+        if is_release:
+            return False
+
+        # Super+Space — never compose; toggle source if the event reached us
+        # (Mutter already handled it in some apps; in terminals it often does not).
+        if (self._super_down or (state & IBus.ModifierType.SUPER_MASK)) and keyval in (
+            IBus.space,
+            IBus.KEY_space,
+        ):
+            if self._composer.pending_latin or self._composer.preview:
+                self._flush_commit_reset()
+            self._switch_to_english_source()
+            return True
+
+        # Super/Ctrl/Alt chords must reach the desktop/app
+        if (
+            self._super_down
+            or self._ctrl_down
+            or self._alt_down
+            or self._has_passthrough_modifier(state)
+        ):
             if self._composer.pending_latin or self._composer.preview:
                 self._flush_commit_reset()
             return False
 
-        # Bare modifier keys (Control_L, Super_L, …) — never consume
+        # Bare non-character keys — never consume
         if not keyval_to_char(keyval) and keyval not in (
             IBus.BackSpace,
             IBus.Escape,
