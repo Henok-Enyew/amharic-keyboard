@@ -147,6 +147,15 @@ class AmharicEngine(IBus.Engine):
         # Monotonic time of last do_enable — used to avoid Super+Space bounce-back
         # when Mutter just activated us via the same keypress.
         self._enabled_at: float | None = None
+        # True after do_disable (or before first enable). Re-enable WITHOUT disable
+        # means GNOME re-selected Amharic while we were already active (desync) —
+        # that must NOT arm the enter bounce-guard, or leave wastes a Super+Space.
+        self._inactive = True
+        self._expect_enter_bounce = False
+        self._typed_since_enable = False
+        self._last_input_at: float | None = None
+        self._leave_timeout_id: int | None = None
+        self._super_down_at: float | None = None
 
     def _new_composer_state(self) -> CompositionState:
         cfg = _CONFIG.config
@@ -165,11 +174,22 @@ class AmharicEngine(IBus.Engine):
 
     def do_enable(self):  # noqa: N802
         self._enabled_at = time.monotonic()
+        # Only treat as English→Amharic enter when we were actually off.
+        self._expect_enter_bounce = self._inactive
+        self._inactive = False
+        self._typed_since_enable = False
+        self._super_down = False
         self._apply_config()
-        LOG.info("engine enabled")
+        # Do NOT write gsettings here — syncing current→Amharic fights Mutter
+        # when Super+Space is also switching sources.
+        LOG.info(
+            "engine enabled (enter_bounce=%s)",
+            self._expect_enter_bounce,
+        )
 
     def do_disable(self):  # noqa: N802
-        self._enabled_at = None
+        self._cancel_leave_timeout()
+        self._mark_inactive("do_disable")
         self._super_down = False
         self._ctrl_down = False
         self._alt_down = False
@@ -182,6 +202,7 @@ class AmharicEngine(IBus.Engine):
         self._client = client or ""
         LOG.info("focus-in-id path=%s client=%s", object_path, client)
         self._apply_config()
+        # Do NOT sync gsettings here — that can fight Mutter mid-switch.
 
     def do_focus_out(self):  # noqa: N802
         self.do_focus_out_id("")
@@ -198,6 +219,15 @@ class AmharicEngine(IBus.Engine):
         self._ctrl_down = False
         self._alt_down = False
         self._flush_commit_reset()
+
+    def _mark_inactive(self, reason: str) -> None:
+        """Local leave state — must not wait for do_disable (it can lag/miss)."""
+        self._enabled_at = None
+        self._inactive = True
+        self._expect_enter_bounce = False
+        self._typed_since_enable = False
+        self._last_input_at = None
+        LOG.info("marked inactive (%s)", reason)
 
     def _clear_preedit(self) -> None:
         empty = IBus.Text.new_from_string("")
@@ -292,6 +322,37 @@ class AmharicEngine(IBus.Engine):
             return None
 
     @staticmethod
+    def _is_amharic_source(pair) -> bool:
+        return bool(pair) and pair[0] == "ibus" and pair[1] == ENGINE_NAME
+
+    def _sync_gnome_current_to_amharic(self) -> None:
+        """Make GNOME `current` match this live engine (fixes idle/reboot desync)."""
+        try:
+            parsed = self._read_gnome_input_sources()
+            if parsed is None:
+                return
+            sources, current = parsed
+            target = None
+            for i, pair in enumerate(sources):
+                if self._is_amharic_source(pair):
+                    target = i
+                    break
+            if target is None or current == target:
+                return
+            subprocess.check_call(
+                [
+                    "gsettings",
+                    "set",
+                    "org.gnome.desktop.input-sources",
+                    "current",
+                    str(target),
+                ]
+            )
+            LOG.info("synced gsettings current → Amharic (index %s)", target)
+        except Exception:
+            LOG.exception("Failed to sync gsettings current to Amharic")
+
+    @staticmethod
     def _just_enabled_at(enabled_at: float | None, window_s: float = 0.45) -> bool:
         """True if Mutter likely just activated us via this Super+Space."""
         if enabled_at is None:
@@ -305,14 +366,14 @@ class AmharicEngine(IBus.Engine):
         """After real typing, Super+Space must leave Amharic (not keep bounce-guard)."""
         if self._enabled_at is not None:
             self._enabled_at = 0.0
+        self._expect_enter_bounce = False
+        self._typed_since_enable = True
+        self._last_input_at = time.monotonic()
 
     def _switch_to_english_source(self) -> None:
-        """Leave Amharic for the first XKB layout (usually English).
-
-        Always force both GNOME `current` and `ibus engine`. GNOME can report
-        English in gsettings while this Amharic engine is still active — skipping
-        in that case leaves the user stuck typing Fidel.
-        """
+        """Leave Amharic for the first XKB layout (usually English)."""
+        self._mark_inactive("force_english")
+        self._super_down = False
         try:
             parsed = self._read_gnome_input_sources()
             sources = parsed[0] if parsed else []
@@ -331,7 +392,6 @@ class AmharicEngine(IBus.Engine):
                         str(target),
                     ]
                 )
-            # Critical: sync ibus even when gsettings already says English
             subprocess.Popen(
                 ["ibus", "engine", "xkb:us::eng"],
                 stdout=subprocess.DEVNULL,
@@ -341,24 +401,36 @@ class AmharicEngine(IBus.Engine):
         except Exception:
             LOG.exception("Failed to switch to English input source")
 
-    def _handle_super_space_switch(self) -> None:
-        """Avoid enter bounce-back; always leave Amharic when stably active.
+    def _cancel_leave_timeout(self) -> None:
+        if self._leave_timeout_id is not None:
+            try:
+                GLib.source_remove(self._leave_timeout_id)
+            except Exception:
+                pass
+            self._leave_timeout_id = None
 
-        - English → Super+Space → Mutter enables us → Space may still arrive:
-          if just enabled, keep Amharic.
-        - Amharic (stable) → Super+Space → force English (gsettings + ibus).
+    def _handle_super_space_switch(self) -> None:
+        """Do not switch sources here — GNOME Mutter owns Super+Space.
+
+        If we consume the key (return True) or call gsettings/ibus ourselves,
+        the center input-source OSD never appears and switching flip-flops.
+        Only clear sticky Super state and flush preedit; caller returns False.
         """
-        if self._just_enabled():
-            LOG.info(
-                "Super+Space: engine just enabled — keep Amharic (no bounce-back)"
-            )
-            return
-        self._switch_to_english_source()
+        self._cancel_leave_timeout()
+        self._super_down = False
+        self._super_down_at = None
+        self._expect_enter_bounce = False
+        LOG.info("Super+Space: passthrough to GNOME (OSD / Mutter owns switch)")
 
     def _update_modifier_latch(self, keyval: int, is_release: bool) -> bool:
         """Track Super/Ctrl/Alt latch. Return True if this keyval is a modifier."""
         if keyval in (IBus.Super_L, IBus.Super_R, IBus.Hyper_L, IBus.Hyper_R):
-            self._super_down = not is_release
+            if is_release:
+                self._super_down = False
+                self._super_down_at = None
+            else:
+                self._super_down = True
+                self._super_down_at = time.monotonic()
             return True
         if keyval in (IBus.Control_L, IBus.Control_R):
             self._ctrl_down = not is_release
@@ -368,6 +440,15 @@ class AmharicEngine(IBus.Engine):
             self._alt_down = not is_release
             return True
         return False
+
+    def _super_chord_active(self, state: int) -> bool:
+        """True only for a real Super chord — not a sticky latch after WM ate key-up."""
+        if state & IBus.ModifierType.SUPER_MASK:
+            return True
+        if not self._super_down or self._super_down_at is None:
+            return False
+        # Super-release is often eaten by Mutter after Super+Space; expire latch fast.
+        return (time.monotonic() - self._super_down_at) < 1.0
 
     def _process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
         del keycode
@@ -385,16 +466,30 @@ class AmharicEngine(IBus.Engine):
         if is_release:
             return False
 
-        # Super+Space — never compose; sync with the real current source.
-        # (Mutter already handled it in some apps; in terminals it often does not).
-        if (self._super_down or (state & IBus.ModifierType.SUPER_MASK)) and keyval in (
+        # Super+Space — NEVER consume. Returning True steals the shortcut from
+        # Mutter, so the GNOME center switcher OSD never appears and sources
+        # desync. Flush preedit, clear sticky Super, pass the event through.
+        if self._super_chord_active(state) and keyval in (
             IBus.space,
             IBus.KEY_space,
         ):
             if self._composer.pending_latin or self._composer.preview:
                 self._flush_commit_reset()
             self._handle_super_space_switch()
-            return True
+            return False
+
+        # Any other Super chord: never compose Amharic under Super
+        if self._super_chord_active(state) or (
+            state & IBus.ModifierType.SUPER_MASK
+        ):
+            if self._composer.pending_latin or self._composer.preview:
+                self._flush_commit_reset()
+            return False
+
+        # Expire sticky Super if a normal key arrives after a grabbed chord
+        if self._super_down and (time.monotonic() - (self._super_down_at or 0)) >= 1.0:
+            self._super_down = False
+            self._super_down_at = None
 
         # User typed after enable — expire bounce guard so leave always works
         if keyval_to_char(keyval) or keyval in (
